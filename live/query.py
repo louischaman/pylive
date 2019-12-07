@@ -3,7 +3,9 @@ import signal
 import inspect
 import threading
 
-import liblo
+from pythonosc.osc_server import BlockingOSCUDPServer
+from pythonosc.udp_client import SimpleUDPClient
+from pythonosc.dispatcher import Dispatcher
 
 from .object import LoggingObject
 from .exceptions import LiveConnectionError
@@ -40,7 +42,7 @@ class Query(LoggingObject):
         live.cmd(path, *args)
     """
 
-    def __init__(self, address=("localhost", 9000), listen_port=9001):
+    def __init__(self, address=("127.0.0.1", 9000), listen_port=9001):
         self.beat_callback = None
         self.startup_callback = None
         self.listen_port = listen_port
@@ -52,11 +54,11 @@ class Query(LoggingObject):
         self.handlers = {}
 
         self.osc_address = address
-        self.osc_target = liblo.Address(address[0], address[1])
-        self.osc_server = liblo.Server(listen_port)
-        self.osc_server.add_method(None, None, self.handler)
+        self.osc_client = SimpleUDPClient(address[0], address[1])
+        dispatcher = Dispatcher()
+        dispatcher.set_default_handler(self.handler)
+        self.osc_server = BlockingOSCUDPServer(("127.0.0.1", listen_port), dispatcher)
         self.osc_server_thread = None
-        self.osc_server.add_bundle_handlers(self.start_bundle_handler, self.end_bundle_handler)
 
         self.osc_read_event = None
         self.osc_timeout = 3.0
@@ -69,8 +71,7 @@ class Query(LoggingObject):
         self.listen()
 
     def osc_server_read(self):
-        while True:
-            self.osc_server.recv(10)
+        self.osc_server.serve_forever() 
 
     def listen(self):
         self.osc_server_thread = threading.Thread(target=self.osc_server_read)
@@ -88,7 +89,7 @@ class Query(LoggingObject):
         
         self.log_debug("OSC output: %s %s", msg, args)
         try:
-            liblo.send(self.osc_target, msg, *args)
+            self.osc_client.send_message( msg, args)
         except Exception as e:
             raise LiveConnectionError("Couldn't send message to Live (is LiveOSC present and activated?)")
 
@@ -149,8 +150,9 @@ class Query(LoggingObject):
     def end_bundle_handler(self, *args):
         self.log_debug("OSC: end bundle")
 
-    def handler(self, address, data, types):
+    def handler(self, address, *data):
         self.log_debug("OSC input: %s %s" % (address, data))
+
 
         #------------------------------------------------------------------------
         # Execute any callbacks that have been registered for this message
